@@ -1,0 +1,165 @@
+from sympy import symbols, diff
+import sympy as sp
+import numpy as np
+import logging
+logging.basicConfig()
+
+
+x_1, x_2 = symbols('x_1 x_2 ', real=True)
+f = x_1**4+x_1**2+x_2**2
+
+def func(x):
+    return x[0]**4+x[0]**2+x[1]**2
+def dxx(f):
+    return diff(f,x_1,x_1)
+def dxy(f):
+    return diff(f,x_1,x_2)
+def dyx(f):
+    return diff(f,x_2,x_1)
+def dyy(f):
+    return diff(f,x_2,x_2)
+def dx(f):
+    return diff(f,x_1)
+def dy(f):
+    return diff(f,x_2)
+def Hession(f,x):
+    return np.array([[dxx(f).evalf(subs={x_1:x[0],x_2:x[1]}),dxy(f).evalf(subs={x_1:x[0],x_2:x[1]})],
+                     [dyx(f).evalf(subs={x_1:x[0],x_2:x[1]}),dyy(f).evalf(subs={x_1:x[0],x_2:x[1]})]],dtype='float')
+def gradient(f,x):
+    return np.array([dx(f).evalf(subs={x_1:x[0],x_2:x[1]}),dy(f).evalf(subs={x_1:x[0],x_2:x[1]})],dtype='float')
+def compute_H_plus_lam(h,lam):
+    return np.array(h+[[lam,0],[0,lam]],dtype='float')
+def compute_L(h,lam):
+    hession = compute_H_plus_lam(h,lam)
+    return np.linalg.cholesky(hession)
+def compute_D(l,g):
+    l_t=np.transpose(l)
+    a = np.linalg.solve(l,-g)
+    d = np.linalg.solve(l_t,a)
+    return d
+
+def d(h,g,lam):
+    H_plus_lam = np.array(h+[[lam,0],[0,lam]],dtype='float')
+    l = np.linalg.cholesky(H_plus_lam)
+    l_t=np.transpose(l)
+    a = np.linalg.solve(l,-g)
+    d = np.linalg.solve(l_t,a)
+    return d
+
+def norm_d(d):
+    return np.linalg.norm(d)
+def compute_w(l,d):
+    w=np.linalg.solve(l,d)
+    return w
+def w_inner(w):#<w,w>
+    return np.inner(w,w)
+def update_lam(lam,delta,normd,wInner):
+    lamda = lam+(1-normd/delta)*(normd**2/(-1*wInner))
+    return lamda
+def phi(d,g,h,x):
+    f_0=func(x)
+    return f_0+np.dot(g,d)+1/2*(np.dot(np.dot(d,h),d))
+def ratio(x,d,phi):
+    new_x=np.array(x)+d
+    ratio = (func(x)-func(new_x))/(func(x)-phi)
+    return ratio
+def Newton(d,l,w,lam,delta):
+    wInner=w_inner(w)
+    normd= norm_d(d)
+    lam = update_lam(lam,delta,normd,wInner)
+    return lam
+
+def newton(h,g,delta,lam):
+    #h:hession
+    #g: gradient
+    #delta: delta
+    #lam: lamda, we need to minize it
+    #e: difference
+    while True:
+        new_d = d(h,g,lam)
+        if np.abs(norm_d(new_d)-delta)<10**-5:
+            return lam
+        l=compute_L(h,lam)
+        w=compute_w(l,new_d)
+        wInner=w_inner(w)
+        normd = norm_d(new_d)
+        lam = update_lam(lam,delta,normd,wInner)
+        
+def kkt(h,g,delta):
+    diag = np.diag(h)
+    sortdiag = sorted(diag,reverse = True)
+    if -1*sortdiag[-1]<0:
+        lam = 0
+        new_d = d(h,g,lam)
+        if delta >=norm_d(new_d):
+            return lam,new_d
+        else:
+            lam = newton(h,g,delta,lam)
+            new_d = d(h,g,lam)
+            return  lam,new_d
+    #elif -1*sortdiag[-1]>0:
+        
+        
+        
+    #return sortdiag
+        
+def h_g_l_d_w(f,x,lam):
+    h=Hession(f,x)
+    g=gradient(f,x)
+    l=compute_L(h,lam)
+    d=compute_D(l,g)
+    w=compute_w(l,d)
+    return h,g,l,d,w
+
+
+def trust_region1(f,x,lam,delta):
+    logger = logging.getLogger("trust region")
+    logger.setLevel(logging.DEBUG)
+    n=0
+    h,g,l,d,w = h_g_l_d_w(f,x,lam)
+    while True:
+        if np.dot(g,g)<=10**-8:
+            logger.debug("\t%d:\t%s\t%8.8f\t%8.16f\t%8.16f\t%4.4f\t%8.16f", n, np.array_str(x, None, 8, True),func(x), normd,delta,lam,np.dot(g,g))  
+            return func(x)
+        h,g,l,d,w = h_g_l_d_w(f,x,lam)
+        normd=norm_d(d)
+        lam=0
+        #while normd>1.1*delta or normd<0.9*delta:
+        while normd>delta:
+            h,g,l,d,w = h_g_l_d_w(f,x,lam)
+            normd=norm_d(d)
+            lam = Newton(d,l,w,lam,delta)
+        phi_x=phi(d,g,h,x)
+        r=ratio(x,d,phi_x)
+        if r<0.25:
+            delta = 0.5*delta
+            x=x
+        else:
+            if r> 0.75 and norm_d(d)==delta:
+                delta=2*delta
+            else:
+                delta=delta
+            x=np.array(x)+d
+        n+=1
+        #if n%5==0 or n <10:
+        logger.debug("\t%d:\t%s\t%8.8f\t%8.16f\t%8.16f\t%4.4f\t%8.16f", n, np.array_str(x, None, 8, True),func(x), normd,delta,lam,np.dot(g,g))  
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
